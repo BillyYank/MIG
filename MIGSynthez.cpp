@@ -104,7 +104,9 @@ private:
     friend class Synthezator;
     friend class MigOptimizer;
     friend class Reshaper;
+    friend class ValidityChecker;
     friend void bfs(Node* node, Visitor& visitor);
+    friend Node* CheckNodeValidity(Node* node);
 };
 
 
@@ -136,6 +138,27 @@ public:
     }
 private:
     int count;
+};
+
+class ValidityChecker : public Visitor {
+public:
+    void Visit(Node* node) {
+        if (node->GetName() == "mig") {
+            assert(node->inputs.size() == 3);
+        } else if (node->GetName() == "inv") {
+            assert(node->inputs.size() == 1);
+        }
+        for (Node* input: node->inputs) {
+            assert(std::find(input->outputs.begin(),
+                            input->outputs.end(),
+                            node) != input->outputs.end());
+        }
+        for (Node* output: node->outputs) {
+            assert(std::find(output->inputs.begin(),
+                            output->inputs.end(),
+                            node) != output->inputs.end());
+        }
+    }
 };
 
 void bfs(Node* node, Visitor& visitor) {
@@ -281,12 +304,10 @@ protected:
     }
     
     void SwitchEdges(Edge first, Edge second) {
-        auto out1 = std::find(first.in->outputs.begin(), first.in->outputs.end(), first.out);
-        auto out2 = std::find(second.in->outputs.begin(), second.in->outputs.end(), second.out);
-        auto in1 = std::find(first.out->inputs.begin(), first.out->inputs.end(), first.in);
-        auto in2 = std::find(second.out->inputs.begin(), second.out->inputs.end(), second.in);
-        std::swap(*out1, *out2);
-        std::swap(*in1, *in2);
+    	DeleteEdge(first);
+    	DeleteEdge(second);
+    	InsertEdge({first.in, second.out});
+    	InsertEdge({second.in, first.out});
         return;
     }
     
@@ -304,6 +325,13 @@ protected:
         return;
     }
     
+    void InsertEdges(std::vector<Edge> edges) {
+        for (auto edge: edges) {
+            InsertEdge(edge);
+        }
+        return;
+    }
+    
     void ReplaceEdge(Edge oldEdge, Edge newEdge) {
         DeleteEdge(oldEdge);
         InsertEdge(newEdge);
@@ -311,10 +339,12 @@ protected:
     }
     
     void DeleteNode(Node* node) {
-        for (Node* input: node->inputs) {
+    	std::vector<Node*> inputs = node->inputs;
+        for (Node* input: inputs) {
             DeleteEdge({input, node});
         }
-        for (Node* output: node->outputs) {
+        std::vector<Node*> outputs = node->outputs;
+        for (Node* output: outputs) {
             DeleteEdge({node, output});
         }
         delete node;
@@ -322,8 +352,9 @@ protected:
     }
     
     Node* ReplaceNode(Node* oldNode, Node* newNode) {
-        newNode->outputs.insert(newNode->outputs.end(),
-                                oldNode->outputs.begin(), oldNode->outputs.end());
+        for (Node* node: oldNode->outputs) {
+            InsertEdge({newNode, node});
+        }
         DeleteNode(oldNode);
         return newNode;
     }
@@ -356,7 +387,7 @@ protected:
             ReplaceEdge({node->inputs[2]->inputs[1], node->inputs[2]},
                         {node->inputs[0], node->inputs[2]});
         }
-        return node;
+        return CheckNodeValidity(node);
     }
     
     
@@ -388,20 +419,40 @@ protected:
             node->inputs[1]->GetName() == "mig" &&
             node->inputs[0]->inputs[0] == node->inputs[1]->inputs[0] &&
             node->inputs[0]->inputs[1] == node->inputs[1]->inputs[1]) {
-            Node* input0 = node->inputs[0];
-            Node* input1 = node->inputs[1];
+
             Node* x = node->inputs[0]->inputs[0];
             Node* y = node->inputs[0]->inputs[1];
             Node* z = node->inputs[2];
             Node* u = node->inputs[0]->inputs[2];
             Node* v = node->inputs[1]->inputs[2];
+
             Node* newZ = new Node(migFunction);
-            InsertEdge({u, newZ});
-            InsertEdge({v, newZ});
-            InsertEdge({z, newZ});
-            ReplaceEdge({input0, node}, {x, node});
-            ReplaceEdge({input1, node}, {y, node});
-            ReplaceEdge({z, node}, {newZ, node});
+            InsertEdges({{u, newZ},{v, newZ},{z, newZ}});
+            
+            Node* newNode = new Node(migFunction);
+            InsertEdges({{x, newNode},{y, newNode},{newZ, newNode}});
+            
+            return ReplaceNode(node, newNode);
+        }
+        return node;
+    }
+    
+    Node* DistributivityLR(Node* node) {
+        if (node->GetName() == "mig" &&
+            node->inputs[2]->GetName() == "mig") {
+            Node* x = node->inputs[0];
+            Node* y = node->inputs[1];
+            Node* u = node->inputs[2]->inputs[0];
+            Node* v = node->inputs[2]->inputs[1];
+            Node* z = node->inputs[2]->inputs[2];
+            
+            Node* newX = new Node(migFunction);
+            InsertEdges({{x, newX}, {y, newX}, {u, newX}});
+            Node* newY = new Node(migFunction);
+            InsertEdges({{x, newY}, {y, newY}, {v, newY}});
+            Node* newNode = new Node(migFunction);
+            InsertEdges({{newX, newNode}, {newY, newNode}, {z, newNode}});
+            return ReplaceNode(node, newNode);
         }
         return node;
     }
@@ -431,7 +482,18 @@ public:
 class DepthAlgOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
-        // TODO
+        int efforts = GetSize(node) / 2;
+        Reshaper reshaper;
+        for (int i = 0; i < efforts; ++i) {
+            Node* randNode = GetRandomNode(node);
+            Majority(randNode);
+            DistributivityLR(randNode);
+            Associativity(randNode);
+            reshaper.Optimize(randNode);
+            Majority(randNode);
+            DistributivityLR(randNode);
+            Associativity(randNode);
+        }
         return node;
     }
 };
@@ -493,11 +555,17 @@ public:
         reshaper.Optimize(node);
         depthAlgOptimizer.Optimize(node);
         sizeAlgOptimizer.Optimize(node);
-        
-        
+
         return node;
     }
 };
+
+
+Node* CheckNodeValidity(Node* node) {
+    ValidityChecker checker;
+    bfs(node, checker);
+    return node;
+}
 
 
 
