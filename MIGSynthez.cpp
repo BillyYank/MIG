@@ -4,6 +4,8 @@
 #include <math.h>
 #include <functional>
 #include <cstdlib>
+#include <queue>
+#include <unordered_set>
 
 
 bool constTrue_(std::vector<bool>& inputs) {
@@ -45,6 +47,7 @@ NamedFunction migFunction({migFunction_, "mig"});
 NamedFunction invFunction({invFunction_, "inv"});
 
 
+class Visitor;
 
 
 
@@ -97,9 +100,60 @@ private:
         return val;
     };
 
+
     friend class Synthezator;
-    friend class Optimizer;
+    friend class MigOptimizer;
+    friend class Reshaper;
+    friend void bfs(Node* node, Visitor& visitor);
 };
+
+
+struct Edge {
+    Node* in;
+    Node* out;
+};
+
+
+// Graph Traversal and Visitor Pattern
+
+class Visitor {
+public:
+    virtual void Visit(Node* node) = 0;
+};
+
+class MigSizeCountor : public Visitor {
+public:
+    MigSizeCountor() : count(0) {}
+
+    void Visit(Node* node) {
+        if (node->GetName() == "mig") {
+            ++count;
+        }
+    }
+    
+    int Count() {
+        return count;
+    }
+private:
+    int count;
+};
+
+void bfs(Node* node, Visitor& visitor) {
+    std::unordered_set<Node*> used;
+    std::queue<Node*> bfsQueue;
+    bfsQueue.push(node);
+    while (!bfsQueue.empty()) {
+        visitor.Visit(bfsQueue.front());
+        for (auto parent: node->inputs) {
+            if (used.find(parent) == used.end()) {
+                bfsQueue.push(parent);
+            }
+        }
+        used.insert(bfsQueue.front());
+        bfsQueue.pop();
+    }
+    return;
+}
 
 
 // Abstract Synthezator
@@ -198,13 +252,160 @@ private:
 
 class MigOptimizer {
 public:
-     Node* Optimize(Node* node) = 0;
-
-private:
-    int GetSize(Node* node);
-    int GetDepth(Node* node);
+    virtual
     
-    Node* GetRandomNode(Node* node);
+    Node* Optimize(Node* node) = 0;
+    
+    int GetSize(Node* node) {
+        MigSizeCountor migSizeVisitor;
+        bfs(node, migSizeVisitor);
+        return migSizeVisitor.Count();
+    }
+    
+    int GetDepth(Node* node) {
+        // TODO
+        return 0;
+    }
+
+protected:
+    Node* GetRandomNode(Node* node) {
+        int nodeSize = GetSize(node);
+        if (nodeSize == 0) {
+            return node;
+        } else if (node->GetName() == "mig" && rand() % nodeSize == 0) {
+            return node;
+        } else {
+            int randIndex = rand() % (node->inputs).size();
+            return GetRandomNode(node->inputs[randIndex]);
+        }
+    }
+    
+    void SwitchEdges(Edge first, Edge second) {
+        auto out1 = std::find(first.in->outputs.begin(), first.in->outputs.end(), first.out);
+        auto out2 = std::find(second.in->outputs.begin(), second.in->outputs.end(), second.out);
+        auto in1 = std::find(first.out->inputs.begin(), first.out->inputs.end(), first.in);
+        auto in2 = std::find(second.out->inputs.begin(), second.out->inputs.end(), second.in);
+        std::swap(*out1, *out2);
+        std::swap(*in1, *in2);
+        return;
+    }
+    
+    void DeleteEdge(Edge edge) {
+        auto inPosition = std::find(edge.in->outputs.begin(), edge.in->outputs.end(), edge.out);
+        auto outPosition = std::find(edge.out->inputs.begin(), edge.out->inputs.end(), edge.in);
+        edge.in->outputs.erase(inPosition);
+        edge.out->inputs.erase(outPosition);
+        return;
+    }
+    
+    void InsertEdge(Edge edge) {
+        edge.in->outputs.push_back(edge.out);
+        edge.out->inputs.push_back(edge.in);
+        return;
+    }
+    
+    void ReplaceEdge(Edge oldEdge, Edge newEdge) {
+        DeleteEdge(oldEdge);
+        InsertEdge(newEdge);
+        return;
+    }
+    
+    void DeleteNode(Node* node) {
+        for (Node* input: node->inputs) {
+            DeleteEdge({input, node});
+        }
+        for (Node* output: node->outputs) {
+            DeleteEdge({node, output});
+        }
+        delete node;
+        return;
+    }
+    
+    Node* ReplaceNode(Node* oldNode, Node* newNode) {
+        newNode->outputs.insert(newNode->outputs.end(),
+                                oldNode->outputs.begin(), oldNode->outputs.end());
+        DeleteNode(oldNode);
+        return newNode;
+    }
+    
+    // Axiom transformations
+    Node* Commutativity(Node* node) {
+        if (node->GetName() == "mig") {
+            int i = rand() % 3;
+            int j = (i + 1) % 3;
+            SwitchEdges({node->inputs[i], node}, {node->inputs[j], node});
+        }
+        return node;
+    }
+    
+    
+    Node* Associativity(Node* node) {
+        if (node->GetName() == "mig" &&
+            node->inputs[2]->GetName() == "mig" &&
+            node->inputs[1] == node->inputs[2]->inputs[1]) {
+            SwitchEdges({node->inputs[0], node}, {node->inputs[2]->inputs[2], node->inputs[2]});
+        }
+        return node;
+    }
+    
+    Node* ComplementaryAssociativity(Node* node) {
+        if (node->GetName() == "mig" &&
+            node->inputs[2]->GetName() == "mig" &&
+            node->inputs[2]->inputs[1]->GetName() == "inv" &&
+            node->inputs[1] == node->inputs[2]->inputs[1]->inputs[0]) {
+            ReplaceEdge({node->inputs[2]->inputs[1], node->inputs[2]},
+                        {node->inputs[0], node->inputs[2]});
+        }
+        return node;
+    }
+    
+    
+    Node* Relevance(Node* node) {
+        //TODO
+        return node;
+    }
+    
+    Node* Substitution(Node* node) {
+        // TODO
+        return node;
+    }
+    
+    Node* Majority(Node* node) {
+        if (node->GetName() == "mig") {
+            if (node->inputs[0] == node->inputs[1]) {
+                return ReplaceNode(node, node->inputs[0]);
+            } else if (node->inputs[1]->GetName() == "inv" &&
+                       node->inputs[0] == node->inputs[1]->inputs[0]) {
+                return ReplaceNode(node, node->inputs[2]);
+            }
+        }
+        return node;
+    }
+    
+    Node* DistributivityRL(Node* node) {
+        if (node->GetName() == "mig" &&
+            node->inputs[0]->GetName() == "mig" &&
+            node->inputs[1]->GetName() == "mig" &&
+            node->inputs[0]->inputs[0] == node->inputs[1]->inputs[0] &&
+            node->inputs[0]->inputs[1] == node->inputs[1]->inputs[1]) {
+            Node* input0 = node->inputs[0];
+            Node* input1 = node->inputs[1];
+            Node* x = node->inputs[0]->inputs[0];
+            Node* y = node->inputs[0]->inputs[1];
+            Node* z = node->inputs[2];
+            Node* u = node->inputs[0]->inputs[2];
+            Node* v = node->inputs[1]->inputs[2];
+            Node* newZ = new Node(migFunction);
+            InsertEdge({u, newZ});
+            InsertEdge({v, newZ});
+            InsertEdge({z, newZ});
+            ReplaceEdge({input0, node}, {x, node});
+            ReplaceEdge({input1, node}, {y, node});
+            ReplaceEdge({z, node}, {newZ, node});
+        }
+        return node;
+    }
+    
 };
 
 
@@ -223,71 +424,52 @@ public:
         
         return node;
     }
-    
-private:
-    Node* Commutativity(Node* node) {
-        if (node->GetName() == "mig") {
-            int i = rand() % 3;
-            int j = (i + 1) % 3;
-            std::swap(node->inputs[i], node->inputs[j]);
-        }
-        return node;
-    }
+};
 
 
-    Node* Associativity(Node* node) {
-        if (node->GetName() == "mig" &&
-            node->inputs[2]->GetName() == "mig" &&
-            node->inputs[1] == node->inputs[2]->inputs[1]) {
-            std::swap(node->inputs[0], node->inputs[2]->inputs[2]);
-        }
-        return node;
-    }
-    
-    Node* ComplementaryAssociativity(Node* node) {
-        if (node->GetName() == "mig" &&
-            node->inputs[2]->GetName() == "mig" &&
-            node->inputs[2]->inputs[1]->GetName() == "inv" &&
-            node->inputs[1] == node->inputs[2]->inputs[1]->inputs[0]) {
-            node->inputs[2]->inputs[1] = node->inputs[0];
-        }
-        return node;
-    }
-    
-    
-    Node* Relevance(Node* node) {
-        //TODO
-        return node;
-    }
-    
-    Node* Substitution(Node* node) {
+
+class DepthAlgOptimizer : public MigOptimizer {
+public:
+    Node* Optimize(Node* node) {
         // TODO
         return node;
     }
 };
 
 
-class DepthAlgOptimizer : public MigOptimizer {
-public:
-    Node* Optimize(Node* node);
-};
-
-
 class SizeAlgOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node);
+    Node* Optimize(Node* node) {
+        int efforts = GetSize(node) / 2;
+        Reshaper reshaper;
+        for (int i = 0; i < efforts; ++i) {
+            Node* randNode = GetRandomNode(node);
+            Majority(randNode);
+            DistributivityRL(randNode);
+            reshaper.Optimize(randNode);
+            Majority(randNode);
+            DistributivityRL(randNode);
+        }
+        return node;
+    }
 };
 
 
 class DepthBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node);
+    Node* Optimize(Node* node) {
+        // TODO
+        return node;
+    }
 };
 
 
 class SizeBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node);
+    Node* Optimize(Node* node) {
+        // TODO
+        return node;
+    }
 };
 
 
@@ -312,6 +494,7 @@ public:
         depthAlgOptimizer.Optimize(node);
         sizeAlgOptimizer.Optimize(node);
         
+        
         return node;
     }
 };
@@ -329,6 +512,11 @@ int main() {
     assert(!testNode->Compute({true, false}));
     assert(!testNode->Compute({true, true}));
     assert(testNode->Compute({false, false}));
+    
+    TopLevelMigOptimizer optimizer = TopLevelMigOptimizer();
+    std::cout << "old size: " << optimizer.GetSize(testNode) << "\n";
+    optimizer.Optimize(testNode);
+    std::cout << "new size: " << optimizer.GetSize(testNode) << "\n";
 
      
 	return 0;
