@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <queue>
 #include <unordered_set>
+#include <fstream>
 
 
 bool constTrue_(std::vector<bool>& inputs) {
@@ -30,7 +31,7 @@ bool invFunction_(std::vector<bool>& inputs) {
 }
 
 
-// function extantion
+// function extention
 struct NamedFunction {
     std::function<bool(std::vector<bool>&)> function;
     std::string name;
@@ -48,6 +49,9 @@ NamedFunction invFunction({invFunction_, "inv"});
 
 
 class Visitor;
+class Node;
+
+void DumpMig(Node* node, std::ostream& stream);
 
 
 
@@ -105,6 +109,7 @@ private:
     friend class MigOptimizer;
     friend class Reshaper;
     friend class ValidityChecker;
+    friend class Dumper;
     friend void bfs(Node* node, Visitor& visitor);
     friend Node* CheckNodeValidity(Node* node);
 };
@@ -161,18 +166,35 @@ public:
     }
 };
 
+class Dumper : public Visitor {
+public:
+	Dumper(std::ostream& stream) : stream(stream) {}
+
+	void Visit(Node* node) {
+		stream << node << " " << node->GetName() << " ";
+		for (Node* input: node->inputs) {
+			stream << input << " ";
+		}
+		stream << "\n";
+	}
+
+private:
+	std::ostream& stream;
+};
+
 void bfs(Node* node, Visitor& visitor) {
     std::unordered_set<Node*> used;
     std::queue<Node*> bfsQueue;
     bfsQueue.push(node);
+    used.insert(node);
     while (!bfsQueue.empty()) {
         visitor.Visit(bfsQueue.front());
-        for (auto parent: node->inputs) {
+        for (auto parent: bfsQueue.front()->inputs) {
             if (used.find(parent) == used.end()) {
                 bfsQueue.push(parent);
+                used.insert(parent);
             }
         }
-        used.insert(bfsQueue.front());
         bfsQueue.pop();
     }
     return;
@@ -277,7 +299,7 @@ class MigOptimizer {
 public:
     virtual
     
-    Node* Optimize(Node* node) = 0;
+    Node* Optimize(Node*& node) = 0;
     
     int GetSize(Node* node) {
         MigSizeCountor migSizeVisitor;
@@ -339,11 +361,11 @@ protected:
     }
     
     void DeleteNode(Node* node) {
-    	std::vector<Node*> inputs = node->inputs;
+    	std::vector<Node*> inputs = std::vector<Node*>(node->inputs);
         for (Node* input: inputs) {
             DeleteEdge({input, node});
         }
-        std::vector<Node*> outputs = node->outputs;
+        std::vector<Node*> outputs = std::vector<Node*>(node->outputs);
         for (Node* output: outputs) {
             DeleteEdge({node, output});
         }
@@ -353,7 +375,7 @@ protected:
     
     Node* ReplaceNode(Node* oldNode, Node* newNode) {
         for (Node* node: oldNode->outputs) {
-            InsertEdge({newNode, node});
+        	InsertEdge({newNode, node});
         }
         DeleteNode(oldNode);
         return newNode;
@@ -452,6 +474,7 @@ protected:
             InsertEdges({{x, newY}, {y, newY}, {v, newY}});
             Node* newNode = new Node(migFunction);
             InsertEdges({{newX, newNode}, {newY, newNode}, {z, newNode}});
+
             return ReplaceNode(node, newNode);
         }
         return node;
@@ -462,7 +485,7 @@ protected:
 
 class Reshaper : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         int efforts = GetSize(node) / 2;
 
         for (int i = 0; i < efforts; ++i) {
@@ -481,36 +504,42 @@ public:
 
 class DepthAlgOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         int efforts = GetSize(node) / 2;
         Reshaper reshaper;
         for (int i = 0; i < efforts; ++i) {
             Node* randNode = GetRandomNode(node);
-            Majority(randNode);
-            DistributivityLR(randNode);
-            Associativity(randNode);
+            bool isNode = (randNode == node);
+
+            randNode = CheckNodeValidity(Associativity(DistributivityLR(Majority(randNode))));
             reshaper.Optimize(randNode);
-            Majority(randNode);
-            DistributivityLR(randNode);
-            Associativity(randNode);
+            randNode = CheckNodeValidity(Associativity(DistributivityLR(Majority(randNode))));
+
+            if (isNode) {
+            	node = randNode;
+            }
         }
-        return node;
+        return CheckNodeValidity(node);
     }
 };
 
 
 class SizeAlgOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         int efforts = GetSize(node) / 2;
         Reshaper reshaper;
         for (int i = 0; i < efforts; ++i) {
             Node* randNode = GetRandomNode(node);
-            Majority(randNode);
-            DistributivityRL(randNode);
+            bool isNode = randNode == node;
+
+            randNode = DistributivityRL(Majority(randNode));
             reshaper.Optimize(randNode);
-            Majority(randNode);
-            DistributivityRL(randNode);
+            randNode = DistributivityRL(Majority(randNode));
+
+            if (isNode) {
+            	node = randNode;
+            }
         }
         return node;
     }
@@ -519,7 +548,7 @@ public:
 
 class DepthBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         // TODO
         return node;
     }
@@ -528,7 +557,7 @@ public:
 
 class SizeBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         // TODO
         return node;
     }
@@ -537,7 +566,7 @@ public:
 
 class TopLevelMigOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node* node) {
+    Node* Optimize(Node*& node) {
         Reshaper reshaper;
         DepthAlgOptimizer depthAlgOptimizer;
         SizeAlgOptimizer sizeAlgOptimizer;
@@ -567,24 +596,46 @@ Node* CheckNodeValidity(Node* node) {
     return node;
 }
 
+void DumpMig(Node* node, std::ostream& stream=std::cout) {
+	Dumper dumper(stream);
+	bfs(node, dumper);
+	return;
+}
+
 
 
 // TEST
 
 int main() {
 	MIGSynthezator mig =  MIGSynthezator();
+    Node* testNode = mig.Synthez({false, true, false, false, false, true, false, true,
+    								false, true, false, true, true, true, false, true,
+									false, false, false, false, false, true, false, true,
+									false, false, false, true, false, true, false, true});
     
-    Node* testNode = mig.Synthez({true, false, true, false});
-    
+    /*
     assert(testNode->Compute({false, true}));
     assert(!testNode->Compute({true, false}));
     assert(!testNode->Compute({true, true}));
     assert(testNode->Compute({false, false}));
+    */
     
+    std::ofstream dumpOld;
+    std::ofstream dumpNew;
+    dumpOld.open("oldMig.mig");
+    dumpNew.open("newMig.mig");
+    //DumpMig(testNode);
+
+    DumpMig(testNode, dumpOld);
+    dumpOld.close();
+
     TopLevelMigOptimizer optimizer = TopLevelMigOptimizer();
     std::cout << "old size: " << optimizer.GetSize(testNode) << "\n";
     optimizer.Optimize(testNode);
     std::cout << "new size: " << optimizer.GetSize(testNode) << "\n";
+
+    DumpMig(testNode, dumpNew);
+    dumpNew.close();
 
      
 	return 0;
