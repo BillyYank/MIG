@@ -171,11 +171,19 @@ public:
 	Dumper(std::ostream& stream) : stream(stream) {}
 
 	void Visit(Node* node) {
-		stream << node << " " << node->GetName() << " ";
+        if (node->GetName() == "input") {
+            stream << "Node" << node << " " << "[color=green];\n";
+        } else if (node->GetName() == "inv") {
+            stream << "Node" << node << " " << "[color=blue];\n";
+        } else if (node->GetName() == "mig") {
+		    stream << "Node" << node << " " << "[color=red];\n";
+        } else {
+            stream << "Node" << node << " " << "[color=gray];\n";
+        }
+
 		for (Node* input: node->inputs) {
-			stream << input << " ";
+			stream << "Node" << input << " -> Node" << node << ";\n";
 		}
-		stream << "\n";
 	}
 
 private:
@@ -598,7 +606,9 @@ Node* CheckNodeValidity(Node* node) {
 
 void DumpMig(Node* node, std::ostream& stream=std::cout) {
 	Dumper dumper(stream);
+    stream << "digraph MIG {\n";
 	bfs(node, dumper);
+    stream << "}\n";
 	return;
 }
 
@@ -609,9 +619,7 @@ void DumpMig(Node* node, std::ostream& stream=std::cout) {
 int main() {
 	MIGSynthezator mig =  MIGSynthezator();
     Node* testNode = mig.Synthez({false, true, false, false, false, true, false, true,
-    								false, true, false, true, true, true, false, true,
-									false, false, false, false, false, true, false, true,
-									false, false, false, true, false, true, false, true});
+    								false, true, false, true, true, true, false, true});
     
     /*
     assert(testNode->Compute({false, true}));
@@ -622,8 +630,8 @@ int main() {
     
     std::ofstream dumpOld;
     std::ofstream dumpNew;
-    dumpOld.open("oldMig.mig");
-    dumpNew.open("newMig.mig");
+    dumpOld.open("oldMig.dot");
+    dumpNew.open("newMig.dot");
     //DumpMig(testNode);
 
     DumpMig(testNode, dumpOld);
