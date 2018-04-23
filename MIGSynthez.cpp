@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <queue>
 #include <unordered_set>
+#include <unordered_map>
 #include <fstream>
 
 
@@ -110,7 +111,9 @@ private:
     friend class Reshaper;
     friend class ValidityChecker;
     friend class Dumper;
+    friend class MigDepthCountor;
     friend void bfs(Node* node, Visitor& visitor);
+    friend void dfs(Node* node, Visitor& visitor);
     friend Node* CheckNodeValidity(Node* node);
 };
 
@@ -190,6 +193,28 @@ private:
 	std::ostream& stream;
 };
 
+class MigDepthCountor : public Visitor {
+public:
+    void Visit(Node* node) {
+        int depth = 0;
+        for (auto parent: node->inputs) {
+            depth = std::max(depth, depthes[parent]);
+        }
+        if (node->GetName() == "mig") {
+            ++depth;
+        }
+        depthes[node] = depth;
+        return;
+    }
+
+    int GetDepth(Node* node) {
+        return depthes[node];
+    }
+
+private:
+    std::unordered_map<Node*, int> depthes;
+};
+
 void bfs(Node* node, Visitor& visitor) {
     std::unordered_set<Node*> used;
     std::queue<Node*> bfsQueue;
@@ -205,6 +230,18 @@ void bfs(Node* node, Visitor& visitor) {
         }
         bfsQueue.pop();
     }
+    return;
+}
+
+void dfs(Node* node, Visitor& visitor) {
+    std::unordered_set<Node*> used;
+    used.insert(node);
+    for (auto parent: node->inputs) {
+        if (used.find(parent) == used.end()) {
+            dfs(parent, visitor);
+        }
+    }
+    visitor.Visit(node);
     return;
 }
 
@@ -316,8 +353,9 @@ public:
     }
     
     int GetDepth(Node* node) {
-        // TODO
-        return 0;
+        MigDepthCountor migDepthCountor;
+        dfs(node, migDepthCountor);
+        return migDepthCountor.GetDepth(node);
     }
 
 protected:
@@ -618,8 +656,7 @@ void DumpMig(Node* node, std::ostream& stream=std::cout) {
 
 int main() {
 	MIGSynthezator mig =  MIGSynthezator();
-    Node* testNode = mig.Synthez({false, true, false, false, false, true, false, true,
-    								false, true, false, true, true, true, false, true});
+    Node* testNode = mig.Synthez({false, true, false, false, false, true, false, true});
     
     /*
     assert(testNode->Compute({false, true}));
@@ -639,8 +676,10 @@ int main() {
 
     TopLevelMigOptimizer optimizer = TopLevelMigOptimizer();
     std::cout << "old size: " << optimizer.GetSize(testNode) << "\n";
+    std::cout << "old depth: " << optimizer.GetDepth(testNode) << "\n";
     optimizer.Optimize(testNode);
     std::cout << "new size: " << optimizer.GetSize(testNode) << "\n";
+    std::cout << "new depth: " << optimizer.GetDepth(testNode) << "\n";
 
     DumpMig(testNode, dumpNew);
     dumpNew.close();
