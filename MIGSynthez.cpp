@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <fstream>
+#include <stack>
 
 
 bool constTrue_(std::vector<bool>& inputs) {
@@ -51,6 +52,7 @@ NamedFunction invFunction({invFunction_, "inv"});
 
 class Visitor;
 class Node;
+class MigOptimizer;
 
 void DumpMig(Node* node, std::ostream& stream);
 
@@ -68,6 +70,14 @@ public:
     
     std::string GetName() {
         return function.name;
+    }
+
+    ~Node() {
+        for (Node* input: inputs) {
+            if (input) {
+                delete input;
+            }
+        }
     }
 
 private:
@@ -112,6 +122,8 @@ private:
     friend class ValidityChecker;
     friend class Dumper;
     friend class MigDepthCountor;
+    friend class CopyMaker;
+    friend class DepthBoolOptimizer;
     friend void bfs(Node* node, Visitor& visitor);
     friend void dfs(Node* node, Visitor& visitor);
     friend Node* CheckNodeValidity(Node* node);
@@ -213,6 +225,18 @@ public:
 
 private:
     std::unordered_map<Node*, int> depthes;
+};
+
+class TopologicalSorter : public Visitor {
+public:
+    void Visit(Node* node) {
+        stack.push(node);
+        return;
+    }
+private:
+    std::stack<Node*> stack;
+
+    friend class DepthBoolOptimizer;
 };
 
 void bfs(Node* node, Visitor& visitor) {
@@ -335,6 +359,8 @@ private:
             return nodes.back();
         }
     }
+
+    friend class DepthBoolOptimizer;
 };
 
 
@@ -387,13 +413,13 @@ protected:
         return;
     }
     
-    void InsertEdge(Edge edge) {
+    static void InsertEdge(Edge edge) {
         edge.in->outputs.push_back(edge.out);
         edge.out->inputs.push_back(edge.in);
         return;
     }
     
-    void InsertEdges(std::vector<Edge> edges) {
+    static void InsertEdges(std::vector<Edge> edges) {
         for (auto edge: edges) {
             InsertEdge(edge);
         }
@@ -526,6 +552,32 @@ protected:
         return node;
     }
     
+    friend class CopyMaker;
+};
+
+
+class CopyMaker : public Visitor {
+public:
+    void Visit(Node* node) {
+        hashCopy[node] = new Node(node->function);
+        for (Node* input: node->inputs) {
+            MigOptimizer::InsertEdge({hashCopy[input], hashCopy[node]});
+        }
+        return;
+    }
+
+    Node* copy(Node* node) {
+        hashCopy.clear();
+        dfs(node, *this);
+        return getNodeCopy(node);
+    }
+
+    Node* getNodeCopy(Node* node) {
+        return hashCopy[node];
+    }
+
+private:
+    std::unordered_map<Node*, Node*> hashCopy;
 };
 
 
@@ -595,8 +647,123 @@ public:
 class DepthBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node*& node) {
+        
+        auto criticalVoters = findCriticalVoters(node);
+        if (criticalVoters.size() < 2) {
+            return node;
+        }
+        Node* nodeA = criticalVoters[0], *nodeB = criticalVoters[1];
+        
+        std::vector<Node*> samePolatiryNodes;
+        for (Node* outA: nodeA->outputs) {
+            if (std::find(nodeB->outputs.begin(),
+                            nodeB->outputs.end(), outA) != nodeB->outputs.end()) {
+                if (outA->GetName() != "inv") {
+                    samePolatiryNodes.push_back(outA);
+                } else {
+                    for (Node* invOut: outA->outputs) {
+                        samePolatiryNodes.push_back(invOut);
+                    }
+                }
+            }
+        }
+
+        CopyMaker copyMaker;
+        // First Error        
+        Node* firstError = copyMaker.copy(node);
+        Node* copyA = copyMaker.getNodeCopy(nodeA);
+        Node* copyB = copyMaker.getNodeCopy(nodeB);
+
+        MIGSynthezator synthezator;
+        ReplaceNode(copyA, synthezator.SynthezInv(copyB));
+
+        
+        // Second Error
+        Node* secondError = copyMaker.copy(node);
+        copyA = copyMaker.getNodeCopy(nodeA);
+        copyB = copyMaker.getNodeCopy(nodeB);
+
+        std::vector<Node*> samePolatiryNodesCopy;
+        for (Node* node_: samePolatiryNodes) {
+            samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+        }
+
+        if (!samePolatiryNodesCopy.empty()) {
+            for (int i = 1; i < samePolatiryNodesCopy.size(); ++i) {
+                ReplaceNode(samePolatiryNodesCopy[i], samePolatiryNodesCopy[0]);
+            }
+            ReplaceNode(copyA, samePolatiryNodesCopy[0]);
+        }
+
+        // Third error
+        Node* thirdError = copyMaker.copy(node);
+        copyA = copyMaker.getNodeCopy(nodeA);
+        copyB = copyMaker.getNodeCopy(nodeB);
+
+        samePolatiryNodesCopy.clear();
+        for (Node* node_: samePolatiryNodes) {
+            samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+        }
+
+        if (!samePolatiryNodesCopy.empty()) {
+            for (int i = 1; i < samePolatiryNodesCopy.size(); ++i) {
+                ReplaceNode(samePolatiryNodesCopy[i], samePolatiryNodesCopy[0]);
+            }
+            ReplaceNode(copyB, samePolatiryNodesCopy[0]);
+        }
+
+        SizeAlgOptimizer sizeAlgOptimizer;
+        sizeAlgOptimizer.Optimize(firstError);
+        sizeAlgOptimizer.Optimize(secondError);
+        sizeAlgOptimizer.Optimize(thirdError);
+
+
+        Node* result = synthezator.SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
+
+        //std::cout << "Result Depth: " << GetDepth(result) << "\n";
+        //std::cout << "Result Size: " << GetSize(result) << "\n";
+        if (GetDepth(result) < GetDepth(node)) {
+            //delete node;
+            return result;
+        } else {
+            //delete result;
+            return node;
+        }
+    }
+private:
+    std::vector<Node*> findCriticalVoters(Node* node) {
         // TODO
-        return node;
+        std::unordered_map<Node*, double> voters;
+        TopologicalSorter topologicalSorter;
+        dfs(node, topologicalSorter);
+        while (!topologicalSorter.stack.empty()) {
+            double criticality = 0;
+            Node* curNode = topologicalSorter.stack.top();
+            for (Node* output: curNode->outputs) {
+                if (output->GetName() == "mig") {
+                    criticality += (1. + voters[output]) / 3;
+                } else {
+                    for (Node* output2: output->outputs) {
+                        if (output2->GetName() == "mig") {
+                            criticality += (1. + voters[output]) / 3;
+                        }
+                    }
+                }
+            }
+            voters[curNode] = criticality;
+            topologicalSorter.stack.pop();
+        }
+        std::vector<std::pair<double, Node*>> votersVector;
+        for (auto el: voters) {
+            votersVector.push_back({el.second, el.first});
+        }
+        std::sort(votersVector.begin(), votersVector.end(), [](std::pair<double, Node*>& a, 
+                                                            std::pair<double, Node*>& b){return a.first > b.first;});
+        std::vector<Node*> result;
+        for (auto voter: votersVector) {
+            result.push_back(voter.second);
+        }
+        return result;
     }
 };
 
@@ -622,7 +789,7 @@ public:
         depthAlgOptimizer.Optimize(node);
         reshaper.Optimize(node);
         sizeAlgOptimizer.Optimize(node);
-        depthBoolOptimizer.Optimize(node);
+        node = depthBoolOptimizer.Optimize(node);
         reshaper.Optimize(node);
         depthAlgOptimizer.Optimize(node);
         sizeBoolOptimizer.Optimize(node);
@@ -656,7 +823,7 @@ void DumpMig(Node* node, std::ostream& stream=std::cout) {
 
 int main() {
 	MIGSynthezator mig =  MIGSynthezator();
-    Node* testNode = mig.Synthez({false, true, false, false, false, true, false, true});
+    Node* testNode = mig.Synthez({true, true, true, true, true, true, true, true});
     
     /*
     assert(testNode->Compute({false, true}));
