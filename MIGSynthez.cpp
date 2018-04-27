@@ -125,7 +125,7 @@ private:
     friend class CopyMaker;
     friend class DepthBoolOptimizer;
     friend void bfs(Node* node, Visitor& visitor);
-    friend void dfs(Node* node, Visitor& visitor);
+    friend void dfs_(Node* node, Visitor& visitor, std::unordered_set<Node*>& used);
     friend Node* CheckNodeValidity(Node* node);
 };
 
@@ -236,7 +236,17 @@ public:
 private:
     std::stack<Node*> stack;
 
-    friend class DepthBoolOptimizer;
+    friend class MigOptimizer;
+};
+
+class NodeToVector : public Visitor {
+public:
+    void Visit(Node* node) {
+        nodesVector.push_back(node);
+        return;
+    }
+
+    std::vector<Node*> nodesVector;
 };
 
 void bfs(Node* node, Visitor& visitor) {
@@ -245,28 +255,32 @@ void bfs(Node* node, Visitor& visitor) {
     bfsQueue.push(node);
     used.insert(node);
     while (!bfsQueue.empty()) {
-        visitor.Visit(bfsQueue.front());
-        for (auto parent: bfsQueue.front()->inputs) {
-            if (used.find(parent) == used.end()) {
-                bfsQueue.push(parent);
-                used.insert(parent);
+            visitor.Visit(bfsQueue.front());
+            for (auto parent: bfsQueue.front()->inputs) {
+                if (used.find(parent) == used.end()) {
+                    bfsQueue.push(parent);
+                    used.insert(parent);
+                }
             }
-        }
         bfsQueue.pop();
     }
     return;
 }
 
-void dfs(Node* node, Visitor& visitor) {
-    std::unordered_set<Node*> used;
+void dfs_(Node* node, Visitor& visitor, std::unordered_set<Node*>& used) {
     used.insert(node);
     for (auto parent: node->inputs) {
         if (used.find(parent) == used.end()) {
-            dfs(parent, visitor);
+            dfs_(parent, visitor, used);
         }
     }
     visitor.Visit(node);
     return;
+}
+
+void dfs(Node* node, Visitor& visitor) {
+    std::unordered_set<Node*> used;
+    dfs_(node, visitor, used);
 }
 
 
@@ -361,6 +375,7 @@ private:
     }
 
     friend class DepthBoolOptimizer;
+    friend class SizeBoolOptimizer;
 };
 
 
@@ -382,6 +397,12 @@ public:
         MigDepthCountor migDepthCountor;
         dfs(node, migDepthCountor);
         return migDepthCountor.GetDepth(node);
+    }
+
+    std::vector<Node*> GetAllParents(Node* node) {
+        NodeToVector nodeToVector;
+        bfs(node, nodeToVector);
+        return nodeToVector.nodesVector;
     }
 
 protected:
@@ -450,15 +471,18 @@ protected:
         	InsertEdge({newNode, node});
         }
         DeleteNode(oldNode);
-        return newNode;
+        return ElemenateInversions(newNode);
     }
+
+    //
     
     // Axiom transformations
     Node* Commutativity(Node* node) {
         if (node->GetName() == "mig") {
             int i = rand() % 3;
             int j = (i + 1) % 3;
-            SwitchEdges({node->inputs[i], node}, {node->inputs[j], node});
+            std::swap(node->inputs[i], node->inputs[j]);
+            //SwitchEdges({node->inputs[i], node}, {node->inputs[j], node});
         }
         return node;
     }
@@ -502,9 +526,13 @@ protected:
             } else if (node->inputs[1]->GetName() == "inv" &&
                        node->inputs[0] == node->inputs[1]->inputs[0]) {
                 return ReplaceNode(node, node->inputs[2]);
+            } else if (node->inputs[0]->GetName() == "inv" &&
+                        node->inputs[1]->GetName() == "inv" &&
+                        node->inputs[0]->inputs[0] == node->inputs[1]->inputs[0]) {
+                return ReplaceNode(node, node->inputs[0]);          
             }
         }
-        return node;
+        return ElemenateInversions(node);
     }
     
     Node* DistributivityRL(Node* node) {
@@ -551,6 +579,109 @@ protected:
         }
         return node;
     }
+
+    Node* ElemenateInversions(Node* node) {
+        bool optimized = false;
+        while (!optimized) {
+            optimized = true;
+            for (Node* parent: GetAllParents(node)) {
+                bool isNode = parent == node;
+                Node* oldNode = parent;
+                
+                if (parent->GetName() == "inv" &&
+                    parent->inputs[0]->GetName() == "inv") {
+                        parent = ReplaceNode(parent, parent->inputs[0]->inputs[0]);
+                }
+                
+                if (oldNode != parent) {
+                    optimized = false;
+                    if (isNode) {
+                        node = parent;
+                    }
+                    break;
+                }
+            }
+        }
+        return node;
+    }
+
+    Node* ElemenateConstNodes(Node* node) {
+        
+        bool optimized = false;
+        while (!optimized) {
+            optimized = true;
+            for (Node* parent: GetAllParents(node)) {
+                if (parent->GetName() == "mig") {
+                    bool isNode = parent == node;
+                    Node* oldNode = parent;
+                    for (int i = 0; i < 10; ++i) {
+                        if (parent->inputs[0]->GetName() == "constTrue" &&
+                            parent->inputs[1]->GetName() == "constTrue") {
+                                parent = ReplaceNode(parent, parent->inputs[0]);
+                                break;
+                        } else if (parent->inputs[0]->GetName() == "constFalse" &&
+                                    parent->inputs[1]->GetName() == "constFalse") {
+                                parent = ReplaceNode(parent, parent->inputs[0]);
+                                break;
+                        } else if (parent->inputs[0]->GetName() == "constTrue" &&
+                                    parent->inputs[1]->GetName() == "constFalse") {
+                                parent = ReplaceNode(parent, parent->inputs[2]);
+                                break;
+                        } else if (parent->inputs[0]->GetName() == "constFalse" &&
+                                    parent->inputs[1]->GetName() == "constTrue") {
+                                parent = ReplaceNode(parent, parent->inputs[2]);
+                                break;
+                        }
+                        Commutativity(parent);
+                    }
+                    if (oldNode != parent) {
+                        optimized = false;
+                        if (isNode) {
+                            node = parent;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        return CheckNodeValidity(node);
+    }
+
+    std::vector<Node*> findCriticalVoters(Node* node) {
+        std::unordered_map<Node*, double> voters;
+        TopologicalSorter topologicalSorter;
+        dfs(node, topologicalSorter);
+        while (!topologicalSorter.stack.empty()) {
+            double criticality = 0;
+            Node* curNode = topologicalSorter.stack.top();
+            for (Node* output: curNode->outputs) {
+                if (output->GetName() == "mig") {
+                    criticality += (1. + voters[output]) / 3;
+                } else {
+                    for (Node* output2: output->outputs) {
+                        if (output2->GetName() == "mig") {
+                            criticality += (1. + voters[output]) / 3;
+                        }
+                    }
+                }
+            }
+            voters[curNode] = criticality;
+            topologicalSorter.stack.pop();
+        }
+        std::vector<std::pair<double, Node*>> votersVector;
+        for (auto el: voters) {
+            votersVector.push_back({el.second, el.first});
+        }
+        std::sort(votersVector.begin(), votersVector.end(), [](std::pair<double, Node*>& a, 
+                                                            std::pair<double, Node*>& b){return a.first > b.first;});
+        std::vector<Node*> result;
+        for (auto voter: votersVector) {
+            if (voter.second->GetName() == "input") {
+                result.push_back(voter.second);
+            }
+        }
+        return result;
+    }
     
     friend class CopyMaker;
 };
@@ -573,7 +704,11 @@ public:
     }
 
     Node* getNodeCopy(Node* node) {
-        return hashCopy[node];
+        if (hashCopy.find(node) != hashCopy.end()) {
+            return hashCopy[node];
+        } else {
+            return nullptr;
+        }
     }
 
 private:
@@ -584,16 +719,11 @@ private:
 class Reshaper : public MigOptimizer {
 public:
     Node* Optimize(Node*& node) {
-        int efforts = GetSize(node) / 2;
-
-        for (int i = 0; i < efforts; ++i) {
-            Commutativity(GetRandomNode(node));
-            Associativity(GetRandomNode(node));
-            Relevance(GetRandomNode(node));
-            Substitution(GetRandomNode(node));
-            ComplementaryAssociativity(GetRandomNode(node));
-        }
-        
+        Commutativity(GetRandomNode(node));
+        Associativity(GetRandomNode(node));
+        Relevance(GetRandomNode(node));
+        Substitution(GetRandomNode(node));
+        ComplementaryAssociativity(GetRandomNode(node));
         return node;
     }
 };
@@ -621,25 +751,31 @@ public:
     }
 };
 
-
 class SizeAlgOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node*& node) {
-        int efforts = GetSize(node) / 2;
         Reshaper reshaper;
-        for (int i = 0; i < efforts; ++i) {
-            Node* randNode = GetRandomNode(node);
-            bool isNode = randNode == node;
-
-            randNode = DistributivityRL(Majority(randNode));
-            reshaper.Optimize(randNode);
-            randNode = DistributivityRL(Majority(randNode));
-
-            if (isNode) {
-            	node = randNode;
+        bool optimized = false;
+        while (!optimized) {
+            optimized = true;
+            for (Node* parent: GetAllParents(node)) {
+                bool isNode = parent == node;
+                Node* oldNode = parent;
+                for (int i = 0; i < 30; ++i) {
+                    parent = DistributivityRL(Majority(parent));
+                    reshaper.Optimize(parent);
+                    parent = DistributivityRL(Majority(parent));
+                }
+                if (oldNode != parent) {
+                    optimized = false;
+                    if (isNode) {
+                        node = parent;
+                    }
+                    break;
+                }
             }
         }
-        return node;
+        return ElemenateConstNodes(node);
     }
 };
 
@@ -647,6 +783,7 @@ public:
 class DepthBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node*& node) {
+        //DumpMig(node, std::cout);
         
         auto criticalVoters = findCriticalVoters(node);
         if (criticalVoters.size() < 2) {
@@ -677,6 +814,7 @@ public:
         MIGSynthezator synthezator;
         ReplaceNode(copyA, synthezator.SynthezInv(copyB));
 
+
         
         // Second Error
         Node* secondError = copyMaker.copy(node);
@@ -685,15 +823,20 @@ public:
 
         std::vector<Node*> samePolatiryNodesCopy;
         for (Node* node_: samePolatiryNodes) {
-            samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+            if (copyMaker.getNodeCopy(node_)) {
+                samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+            }
         }
 
         if (!samePolatiryNodesCopy.empty()) {
             for (int i = 1; i < samePolatiryNodesCopy.size(); ++i) {
                 ReplaceNode(samePolatiryNodesCopy[i], samePolatiryNodesCopy[0]);
             }
-            ReplaceNode(copyA, samePolatiryNodesCopy[0]);
+            ReplaceNode(samePolatiryNodesCopy[0], copyA);
         }
+
+        //DumpMig(secondError, std::cout);
+        std::cout << "Second Error Size: " << GetSize(secondError) << "\n";
 
         // Third error
         Node* thirdError = copyMaker.copy(node);
@@ -702,68 +845,37 @@ public:
 
         samePolatiryNodesCopy.clear();
         for (Node* node_: samePolatiryNodes) {
-            samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+            if (copyMaker.getNodeCopy(node_)) {
+                samePolatiryNodesCopy.push_back(copyMaker.getNodeCopy(node_));
+            }
         }
 
         if (!samePolatiryNodesCopy.empty()) {
             for (int i = 1; i < samePolatiryNodesCopy.size(); ++i) {
                 ReplaceNode(samePolatiryNodesCopy[i], samePolatiryNodesCopy[0]);
             }
-            ReplaceNode(copyB, samePolatiryNodesCopy[0]);
+            ReplaceNode(samePolatiryNodesCopy[0], copyB);
         }
+        std::cout << "Third Error Size: " << GetSize(thirdError) << "\n";
 
         SizeAlgOptimizer sizeAlgOptimizer;
-        sizeAlgOptimizer.Optimize(firstError);
-        sizeAlgOptimizer.Optimize(secondError);
-        sizeAlgOptimizer.Optimize(thirdError);
+        firstError = sizeAlgOptimizer.Optimize(firstError);
+        secondError = sizeAlgOptimizer.Optimize(secondError);
+        //DumpMig(secondError, std::cout);
+        std::cout << "Second Error Size: " << GetSize(secondError) << "\n";
+        thirdError = sizeAlgOptimizer.Optimize(thirdError);
+        std::cout << "Third Error Size: " << GetSize(thirdError) << "\n";
 
 
         Node* result = synthezator.SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
 
-        //std::cout << "Result Depth: " << GetDepth(result) << "\n";
-        //std::cout << "Result Size: " << GetSize(result) << "\n";
         if (GetDepth(result) < GetDepth(node)) {
-            //delete node;
+            delete node;
             return result;
         } else {
             //delete result;
             return node;
         }
-    }
-private:
-    std::vector<Node*> findCriticalVoters(Node* node) {
-        // TODO
-        std::unordered_map<Node*, double> voters;
-        TopologicalSorter topologicalSorter;
-        dfs(node, topologicalSorter);
-        while (!topologicalSorter.stack.empty()) {
-            double criticality = 0;
-            Node* curNode = topologicalSorter.stack.top();
-            for (Node* output: curNode->outputs) {
-                if (output->GetName() == "mig") {
-                    criticality += (1. + voters[output]) / 3;
-                } else {
-                    for (Node* output2: output->outputs) {
-                        if (output2->GetName() == "mig") {
-                            criticality += (1. + voters[output]) / 3;
-                        }
-                    }
-                }
-            }
-            voters[curNode] = criticality;
-            topologicalSorter.stack.pop();
-        }
-        std::vector<std::pair<double, Node*>> votersVector;
-        for (auto el: voters) {
-            votersVector.push_back({el.second, el.first});
-        }
-        std::sort(votersVector.begin(), votersVector.end(), [](std::pair<double, Node*>& a, 
-                                                            std::pair<double, Node*>& b){return a.first > b.first;});
-        std::vector<Node*> result;
-        for (auto voter: votersVector) {
-            result.push_back(voter.second);
-        }
-        return result;
     }
 };
 
@@ -771,8 +883,60 @@ private:
 class SizeBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node*& node) {
-        // TODO
-        return node;
+        auto criticalVoters = findCriticalVoters(node);
+        if (criticalVoters.size() < 3) {
+            return node;
+        }
+        Node* nodeA = criticalVoters[0], *nodeB = criticalVoters[1], *nodeC = criticalVoters[2];
+        //DumpMig(node, std::cout);
+
+        CopyMaker copyMaker;
+        // First Error        
+        Node* firstError = copyMaker.copy(node);
+        Node* copyA = copyMaker.getNodeCopy(nodeA);
+        Node* copyB = copyMaker.getNodeCopy(nodeB);
+        Node* copyC = copyMaker.getNodeCopy(nodeC);
+
+        ReplaceNode(copyA, copyB);
+
+        // Second Error        
+        Node* secondError = copyMaker.copy(node);
+        copyA = copyMaker.getNodeCopy(nodeA);
+        copyB = copyMaker.getNodeCopy(nodeB);
+        copyC = copyMaker.getNodeCopy(nodeC);
+
+        MIGSynthezator synthezator;
+        ReplaceNode(copyB, copyA);
+        ReplaceNode(copyA, synthezator.SynthezInv(copyC));
+
+        // Third error
+        Node* thirdError = copyMaker.copy(node);
+        copyA = copyMaker.getNodeCopy(nodeA);
+        copyB = copyMaker.getNodeCopy(nodeB);
+        copyC = copyMaker.getNodeCopy(nodeC);
+
+        ReplaceNode(copyB, copyA);
+        ReplaceNode(copyC, copyA);
+
+        //DumpMig(firstError, std::cout);
+        SizeAlgOptimizer sizeAlgOptimizer;
+        firstError = sizeAlgOptimizer.Optimize(firstError);
+        //DumpMig(firstError, std::cout);
+        secondError = sizeAlgOptimizer.Optimize(secondError);
+        thirdError = sizeAlgOptimizer.Optimize(thirdError);
+
+
+        Node* result = synthezator.SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
+
+        std::cout << "Result Depth: " << GetDepth(result) << "\n";
+        std::cout << "Result Size: " << GetSize(result) << "\n";
+        if (GetDepth(result) < GetDepth(node)) {
+            //delete node;
+            return result;
+        } else {
+            //delete result;
+            return node;
+        }
     }
 };
 
@@ -786,17 +950,18 @@ public:
         DepthBoolOptimizer depthBoolOptimizer;
         SizeBoolOptimizer sizeBoolOptimizer;
         
-        depthAlgOptimizer.Optimize(node);
+        //depthAlgOptimizer.Optimize(node);
         reshaper.Optimize(node);
-        sizeAlgOptimizer.Optimize(node);
-        node = depthBoolOptimizer.Optimize(node);
-        reshaper.Optimize(node);
-        depthAlgOptimizer.Optimize(node);
-        sizeBoolOptimizer.Optimize(node);
-        sizeAlgOptimizer.Optimize(node);
-        reshaper.Optimize(node);
-        depthAlgOptimizer.Optimize(node);
-        sizeAlgOptimizer.Optimize(node);
+        node = sizeAlgOptimizer.Optimize(node);
+        //node = depthBoolOptimizer.Optimize(node);
+        node = sizeBoolOptimizer.Optimize(node);
+        node = reshaper.Optimize(node);
+        //depthAlgOptimizer.Optimize(node);
+        //sizeBoolOptimizer.Optimize(node);
+        node = sizeAlgOptimizer.Optimize(node);
+        node = reshaper.Optimize(node);
+        //depthAlgOptimizer.Optimize(node);
+        node = sizeAlgOptimizer.Optimize(node);
 
         return node;
     }
@@ -817,13 +982,26 @@ void DumpMig(Node* node, std::ostream& stream=std::cout) {
 	return;
 }
 
+void CheckEqualNodes(Node* first, Node* second, int size) {
+    std::vector<bool> input;
+    for (int i = 0; i < std::pow(2, size); ++i) {
+        input.clear();
+        for (int j = 0; j < size; ++j) {
+            input.push_back(bool((1 << j) & i));
+        }
+        assert(first->Compute(input) == second->Compute(input));
+        std::cout << i << " passed\n";
+    }
+}
+
 
 
 // TEST
 
 int main() {
 	MIGSynthezator mig =  MIGSynthezator();
-    Node* testNode = mig.Synthez({true, true, true, true, true, true, true, true});
+    Node* testNode = mig.Synthez({true, false, true, true,
+                                false, true, false, false });
     
     /*
     assert(testNode->Compute({false, true}));
@@ -832,14 +1010,10 @@ int main() {
     assert(testNode->Compute({false, false}));
     */
     
-    std::ofstream dumpOld;
-    std::ofstream dumpNew;
-    dumpOld.open("oldMig.dot");
-    dumpNew.open("newMig.dot");
-    //DumpMig(testNode);
-
-    DumpMig(testNode, dumpOld);
-    dumpOld.close();
+    DumpMig(testNode, std::cout);
+    CopyMaker copyMaker;
+    Node* oldNode = copyMaker.copy(testNode);
+    
 
     TopLevelMigOptimizer optimizer = TopLevelMigOptimizer();
     std::cout << "old size: " << optimizer.GetSize(testNode) << "\n";
@@ -848,8 +1022,8 @@ int main() {
     std::cout << "new size: " << optimizer.GetSize(testNode) << "\n";
     std::cout << "new depth: " << optimizer.GetDepth(testNode) << "\n";
 
-    DumpMig(testNode, dumpNew);
-    dumpNew.close();
+    DumpMig(testNode, std::cout);
+    CheckEqualNodes(oldNode, testNode, 3);
 
      
 	return 0;
