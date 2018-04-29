@@ -55,7 +55,12 @@ class Node;
 class MigOptimizer;
 
 void DumpMig(Node* node, std::ostream& stream);
+void dfs(Node* node, Visitor& visitor);
 
+class Visitor {
+public:
+    virtual Node* Visit(Node* node) = 0;
+};
 
 
 // Abstract Scheme
@@ -64,8 +69,9 @@ public:
     Node(NamedFunction function) : function(function) {}
     
     bool Compute(std::vector<bool> inputVal) {
-        SetToZero();
-        return Compute_(inputVal);
+        ComputeVisitor computeVisitor(inputVal);
+        dfs(this, computeVisitor);
+        return computeVisitor.Compute(this);
     }
     
     std::string GetName() {
@@ -88,31 +94,31 @@ private:
     
 	std::vector<Node*> inputs;
 	std::vector<Node*> outputs;
-    
-    void SetToZero() {
-        if (computed) {
-            computed = false;
-            for (auto& input: inputs) {
-                input->SetToZero();
+
+    class ComputeVisitor : public Visitor {
+    public:
+        ComputeVisitor(std::vector<bool>& inputValues) : inputValues(inputValues) {}
+
+        Node* Visit(Node* node) {
+            std::vector<bool> parentValues;
+            for (Node* parent: node->inputs) {
+                parentValues.push_back(values[parent]);
             }
-        }
-        return;
-    }
-    
-    bool Compute_(std::vector<bool>& inputVals) {
-        if (computed) {
-            return val;
-        } else if (inputs.empty()) {
-            val = function(inputVals);
-        } else {
-            std::vector<bool> parentVals;
-            for (int i = 0; i < inputs.size(); ++i) {
-                parentVals.push_back(inputs[i]->Compute_(inputVals));
+            if (parentValues.empty()) {
+                values[node] = node->function(inputValues);
+            } else {
+                values[node] = node->function(parentValues);
             }
-            val = function(parentVals);
+            node->val = values[node];
+            return node;
         }
-        computed = true;
-        return val;
+
+        bool Compute(Node* node) {
+            return values[node];
+        }
+    private:
+        std::unordered_map<Node*, bool> values;
+        std::vector<bool> inputValues;
     };
 
 
@@ -136,12 +142,7 @@ struct Edge {
 };
 
 
-// Graph Traversal and Visitor Pattern
 
-class Visitor {
-public:
-    virtual Node* Visit(Node* node) = 0;
-};
 
 class MigSizeCountor : public Visitor {
 public:
@@ -624,6 +625,10 @@ protected:
         return IterateWhileNotOptimized(node, visitor);
     }
 
+    static Node* ElemenateTrivials(Node* node) {
+        return ElemenateConstNodes(ElemenateInversions(node));
+    }
+
     std::vector<Node*> findCriticalVoters(Node* node) {
         std::unordered_map<Node*, double> voters;
         TopologicalSorter topologicalSorter;
@@ -697,8 +702,8 @@ class Reshaper : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
         node = Commutativity(node);
-        //node = Associativity(node);
-        //node = ComplementaryAssociativity(node);
+        node = Associativity(node);
+        node = ComplementaryAssociativity(node);
         return node;
     }
 };
@@ -708,21 +713,12 @@ public:
 class DepthAlgOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
-        int efforts = GetSize(node) / 2;
-        Reshaper reshaper;
-        for (int i = 0; i < efforts; ++i) {
-            Node* randNode = GetRandomNode(node);
-            bool isNode = (randNode == node);
-
-            randNode = Associativity(DistributivityLR(Majority(randNode)));
-            reshaper.Optimize(randNode);
-            randNode = Associativity(DistributivityLR(Majority(randNode)));
-
-            if (isNode) {
-            	node = randNode;
-            }
-        }
-        return node;
+        // Causes infinite size increase
+        /*
+        DepthAlgOptimizerVisitor depthAlgOptimizerVisitor;
+        return IterateWhileNotOptimized(node, depthAlgOptimizerVisitor);
+        */
+       return ElemenateTrivials(node);
     }
 private:
     class DepthAlgOptimizerVisitor : public Visitor {
@@ -741,29 +737,22 @@ private:
 class SizeAlgOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
-        Reshaper reshaper;
-        bool optimized = false;
-        while (!optimized) {
-            optimized = true;
-            for (Node* parent: GetAllParents(node)) {
-                bool isNode = parent == node;
-                Node* oldNode = parent;
-                for (int i = 0; i < 30; ++i) {
-                    parent = DistributivityRL(Majority(parent));
-                    reshaper.Optimize(parent);
-                    parent = DistributivityRL(Majority(parent));
-                }
-                if (oldNode != parent) {
-                    optimized = false;
-                    if (isNode) {
-                        node = parent;
-                    }
-                    break;
-                }
-            }
-        }
-        return ElemenateConstNodes(node);
+        SizeAlgOptimizerVisitor sizeAlgOptimizerVisitor;
+        node = IterateWhileNotOptimized(node, sizeAlgOptimizerVisitor);
+        return ElemenateTrivials(node);
     }
+private:
+    class SizeAlgOptimizerVisitor : public Visitor {
+    public:
+        Node* Visit(Node* node) {
+            Reshaper reshaper;
+            for (int i = 0; i < 10; ++i) {
+                node = DistributivityRL(Majority(node));
+                reshaper.Optimize(node);
+            }
+            return node;
+        }
+    };
 };
 
 

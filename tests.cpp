@@ -69,7 +69,9 @@ Node* checkSynthezator(std::vector<bool>& funcTable) {
             input.push_back(bool((1 << j) & i));
         }
         if (node->Compute(input) != funcTable[i]) {
+            DumpMig(node, std::cout);
             throw std::logic_error("synthezator fail");
+            assert(false);
         }
     }
     std::cout << "checkSynthezator passed\n";
