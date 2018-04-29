@@ -140,17 +140,18 @@ struct Edge {
 
 class Visitor {
 public:
-    virtual void Visit(Node* node) = 0;
+    virtual Node* Visit(Node* node) = 0;
 };
 
 class MigSizeCountor : public Visitor {
 public:
     MigSizeCountor() : count(0) {}
 
-    void Visit(Node* node) {
+    Node* Visit(Node* node) {
         if (node->GetName() == "mig") {
             ++count;
         }
+        return node;
     }
     
     int Count() {
@@ -160,45 +161,25 @@ private:
     int count;
 };
 
-class ValidityChecker : public Visitor {
-public:
-    void Visit(Node* node) {
-        if (node->GetName() == "mig") {
-            assert(node->inputs.size() == 3);
-        } else if (node->GetName() == "inv") {
-            assert(node->inputs.size() == 1);
-        }
-        for (Node* input: node->inputs) {
-            assert(std::find(input->outputs.begin(),
-                            input->outputs.end(),
-                            node) != input->outputs.end());
-        }
-        for (Node* output: node->outputs) {
-            assert(std::find(output->inputs.begin(),
-                            output->inputs.end(),
-                            node) != output->inputs.end());
-        }
-    }
-};
-
 class Dumper : public Visitor {
 public:
 	Dumper(std::ostream& stream) : stream(stream) {}
 
-	void Visit(Node* node) {
+	Node* Visit(Node* node) {
         if (node->GetName() == "input") {
-            stream << "Node" << node << " " << "[color=green];\n";
+            stream << "Node" << node << "_" << node->val << " " << "[color=green];\n";
         } else if (node->GetName() == "inv") {
-            stream << "Node" << node << " " << "[color=blue];\n";
+            stream << "Node" << node << "_" << node->val << " " << "[color=blue];\n";
         } else if (node->GetName() == "mig") {
-		    stream << "Node" << node << " " << "[color=red];\n";
+		    stream << "Node" << node << "_" << node->val << " " << "[color=red];\n";
         } else {
-            stream << "Node" << node << " " << "[color=gray];\n";
+            stream << "Node" << node << "_" << node->val << " " << "[color=gray];\n";
         }
 
 		for (Node* input: node->inputs) {
-			stream << "Node" << input << " -> Node" << node << ";\n";
+			stream << "Node" << input << "_" << input->val << " -> Node" << node << "_" << node->val << ";\n";
 		}
+        return node;
 	}
 
 private:
@@ -207,7 +188,7 @@ private:
 
 class MigDepthCountor : public Visitor {
 public:
-    void Visit(Node* node) {
+    Node* Visit(Node* node) {
         int depth = 0;
         for (auto parent: node->inputs) {
             depth = std::max(depth, depthes[parent]);
@@ -216,7 +197,7 @@ public:
             ++depth;
         }
         depthes[node] = depth;
-        return;
+        return node;
     }
 
     int GetDepth(Node* node) {
@@ -229,9 +210,9 @@ private:
 
 class TopologicalSorter : public Visitor {
 public:
-    void Visit(Node* node) {
+    Node* Visit(Node* node) {
         stack.push(node);
-        return;
+        return node;
     }
 private:
     std::stack<Node*> stack;
@@ -241,13 +222,15 @@ private:
 
 class NodeToVector : public Visitor {
 public:
-    void Visit(Node* node) {
+    Node* Visit(Node* node) {
         nodesVector.push_back(node);
-        return;
+        return node;
     }
 
     std::vector<Node*> nodesVector;
 };
+
+
 
 void bfs(Node* node, Visitor& visitor) {
     std::unordered_set<Node*> used;
@@ -385,7 +368,7 @@ class MigOptimizer {
 public:
     virtual
     
-    Node* Optimize(Node*& node) = 0;
+    Node* Optimize(Node* node) = 0;
     
     int GetSize(Node* node) {
         MigSizeCountor migSizeVisitor;
@@ -399,7 +382,7 @@ public:
         return migDepthCountor.GetDepth(node);
     }
 
-    std::vector<Node*> GetAllParents(Node* node) {
+    static std::vector<Node*> GetAllParents(Node* node) {
         NodeToVector nodeToVector;
         bfs(node, nodeToVector);
         return nodeToVector.nodesVector;
@@ -418,7 +401,7 @@ protected:
         }
     }
     
-    void SwitchEdges(Edge first, Edge second) {
+    static void SwitchEdges(Edge first, Edge second) {
     	DeleteEdge(first);
     	DeleteEdge(second);
     	InsertEdge({first.in, second.out});
@@ -426,7 +409,7 @@ protected:
         return;
     }
     
-    void DeleteEdge(Edge edge) {
+    static void DeleteEdge(Edge edge) {
         auto inPosition = std::find(edge.in->outputs.begin(), edge.in->outputs.end(), edge.out);
         auto outPosition = std::find(edge.out->inputs.begin(), edge.out->inputs.end(), edge.in);
         edge.in->outputs.erase(inPosition);
@@ -447,13 +430,13 @@ protected:
         return;
     }
     
-    void ReplaceEdge(Edge oldEdge, Edge newEdge) {
+    static void ReplaceEdge(Edge oldEdge, Edge newEdge) {
         DeleteEdge(oldEdge);
         InsertEdge(newEdge);
         return;
     }
     
-    void DeleteNode(Node* node) {
+    static void DeleteNode(Node* node) {
     	std::vector<Node*> inputs = std::vector<Node*>(node->inputs);
         for (Node* input: inputs) {
             DeleteEdge({input, node});
@@ -466,7 +449,7 @@ protected:
         return;
     }
     
-    Node* ReplaceNode(Node* oldNode, Node* newNode) {
+    static Node* ReplaceNode(Node* oldNode, Node* newNode) {
         for (Node* node: oldNode->outputs) {
         	InsertEdge({newNode, node});
         }
@@ -477,18 +460,17 @@ protected:
     //
     
     // Axiom transformations
-    Node* Commutativity(Node* node) {
+    static Node* Commutativity(Node* node) {
         if (node->GetName() == "mig") {
             int i = rand() % 3;
             int j = (i + 1) % 3;
             std::swap(node->inputs[i], node->inputs[j]);
-            //SwitchEdges({node->inputs[i], node}, {node->inputs[j], node});
         }
         return node;
     }
     
     
-    Node* Associativity(Node* node) {
+    static Node* Associativity(Node* node) {
         if (node->GetName() == "mig" &&
             node->inputs[2]->GetName() == "mig" &&
             node->inputs[1] == node->inputs[2]->inputs[1]) {
@@ -497,7 +479,7 @@ protected:
         return node;
     }
     
-    Node* ComplementaryAssociativity(Node* node) {
+    static Node* ComplementaryAssociativity(Node* node) {
         if (node->GetName() == "mig" &&
             node->inputs[2]->GetName() == "mig" &&
             node->inputs[2]->inputs[1]->GetName() == "inv" &&
@@ -505,21 +487,21 @@ protected:
             ReplaceEdge({node->inputs[2]->inputs[1], node->inputs[2]},
                         {node->inputs[0], node->inputs[2]});
         }
-        return CheckNodeValidity(node);
+        return node;
     }
     
     
-    Node* Relevance(Node* node) {
+    static Node* Relevance(Node* node) {
         //TODO
         return node;
     }
     
-    Node* Substitution(Node* node) {
+    static Node* Substitution(Node* node) {
         // TODO
         return node;
     }
     
-    Node* Majority(Node* node) {
+    static Node* Majority(Node* node) {
         if (node->GetName() == "mig") {
             if (node->inputs[0] == node->inputs[1]) {
                 return ReplaceNode(node, node->inputs[0]);
@@ -535,7 +517,7 @@ protected:
         return ElemenateInversions(node);
     }
     
-    Node* DistributivityRL(Node* node) {
+    static Node* DistributivityRL(Node* node) {
         if (node->GetName() == "mig" &&
             node->inputs[0]->GetName() == "mig" &&
             node->inputs[1]->GetName() == "mig" &&
@@ -559,7 +541,7 @@ protected:
         return node;
     }
     
-    Node* DistributivityLR(Node* node) {
+    static Node* DistributivityLR(Node* node) {
         if (node->GetName() == "mig" &&
             node->inputs[2]->GetName() == "mig") {
             Node* x = node->inputs[0];
@@ -580,19 +562,14 @@ protected:
         return node;
     }
 
-    Node* ElemenateInversions(Node* node) {
+    static Node* IterateWhileNotOptimized(Node* node, Visitor& visitor) {
         bool optimized = false;
         while (!optimized) {
             optimized = true;
             for (Node* parent: GetAllParents(node)) {
                 bool isNode = parent == node;
                 Node* oldNode = parent;
-                
-                if (parent->GetName() == "inv" &&
-                    parent->inputs[0]->GetName() == "inv") {
-                        parent = ReplaceNode(parent, parent->inputs[0]->inputs[0]);
-                }
-                
+                parent = visitor.Visit(parent);
                 if (oldNode != parent) {
                     optimized = false;
                     if (isNode) {
@@ -605,46 +582,46 @@ protected:
         return node;
     }
 
-    Node* ElemenateConstNodes(Node* node) {
-        
-        bool optimized = false;
-        while (!optimized) {
-            optimized = true;
-            for (Node* parent: GetAllParents(node)) {
-                if (parent->GetName() == "mig") {
-                    bool isNode = parent == node;
-                    Node* oldNode = parent;
-                    for (int i = 0; i < 10; ++i) {
-                        if (parent->inputs[0]->GetName() == "constTrue" &&
-                            parent->inputs[1]->GetName() == "constTrue") {
-                                parent = ReplaceNode(parent, parent->inputs[0]);
-                                break;
-                        } else if (parent->inputs[0]->GetName() == "constFalse" &&
-                                    parent->inputs[1]->GetName() == "constFalse") {
-                                parent = ReplaceNode(parent, parent->inputs[0]);
-                                break;
-                        } else if (parent->inputs[0]->GetName() == "constTrue" &&
-                                    parent->inputs[1]->GetName() == "constFalse") {
-                                parent = ReplaceNode(parent, parent->inputs[2]);
-                                break;
-                        } else if (parent->inputs[0]->GetName() == "constFalse" &&
-                                    parent->inputs[1]->GetName() == "constTrue") {
-                                parent = ReplaceNode(parent, parent->inputs[2]);
-                                break;
-                        }
-                        Commutativity(parent);
-                    }
-                    if (oldNode != parent) {
-                        optimized = false;
-                        if (isNode) {
-                            node = parent;
-                        }
-                        break;
-                    }
+    class ElemenateInversionsVisitor : public Visitor {
+    public:
+        Node* Visit(Node* node) {
+            if (node->GetName() == "inv" &&
+                node->inputs[0]->GetName() == "inv") {
+                return  ReplaceNode(node, node->inputs[0]->inputs[0]);
+            }
+            return node;
+        }
+    };
+
+    static Node* ElemenateInversions(Node* node) {
+        ElemenateInversionsVisitor visitor;
+        return IterateWhileNotOptimized(node, visitor);
+    }
+
+    class ElemenateConstNodesVisitor : public Visitor {
+    public:
+        Node* Visit(Node* node) {
+            if (node->GetName() == "mig") {
+                std::sort(node->inputs.begin(), node->inputs.end(), [](Node*& a, Node*& b) {
+                    return a->GetName() < b->GetName();
+                });
+                if ((node->inputs[0]->GetName() == "constTrue" &&
+                    node->inputs[1]->GetName() == "constTrue") ||
+                    (node->inputs[0]->GetName() == "constFalse" &&
+                    node->inputs[1]->GetName() == "constFalse")) {
+                        return ReplaceNode(node, node->inputs[0]);
+                } else if (node->inputs[0]->GetName() == "constFalse" &&
+                        node->inputs[1]->GetName() == "constTrue") {
+                        return ReplaceNode(node, node->inputs[2]);
                 }
             }
+            return node;
         }
-        return CheckNodeValidity(node);
+    };
+
+    static Node* ElemenateConstNodes(Node* node) {
+        ElemenateConstNodesVisitor visitor;
+        return IterateWhileNotOptimized(node, visitor);
     }
 
     std::vector<Node*> findCriticalVoters(Node* node) {
@@ -689,12 +666,12 @@ protected:
 
 class CopyMaker : public Visitor {
 public:
-    void Visit(Node* node) {
+    Node* Visit(Node* node) {
         hashCopy[node] = new Node(node->function);
         for (Node* input: node->inputs) {
             MigOptimizer::InsertEdge({hashCopy[input], hashCopy[node]});
         }
-        return;
+        return hashCopy[node];
     }
 
     Node* copy(Node* node) {
@@ -718,12 +695,10 @@ private:
 
 class Reshaper : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
-        Commutativity(GetRandomNode(node));
-        Associativity(GetRandomNode(node));
-        Relevance(GetRandomNode(node));
-        Substitution(GetRandomNode(node));
-        ComplementaryAssociativity(GetRandomNode(node));
+    Node* Optimize(Node* node) {
+        node = Commutativity(node);
+        //node = Associativity(node);
+        //node = ComplementaryAssociativity(node);
         return node;
     }
 };
@@ -732,28 +707,40 @@ public:
 
 class DepthAlgOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
+    Node* Optimize(Node* node) {
         int efforts = GetSize(node) / 2;
         Reshaper reshaper;
         for (int i = 0; i < efforts; ++i) {
             Node* randNode = GetRandomNode(node);
             bool isNode = (randNode == node);
 
-            randNode = CheckNodeValidity(Associativity(DistributivityLR(Majority(randNode))));
+            randNode = Associativity(DistributivityLR(Majority(randNode)));
             reshaper.Optimize(randNode);
-            randNode = CheckNodeValidity(Associativity(DistributivityLR(Majority(randNode))));
+            randNode = Associativity(DistributivityLR(Majority(randNode)));
 
             if (isNode) {
             	node = randNode;
             }
         }
-        return CheckNodeValidity(node);
+        return node;
     }
+private:
+    class DepthAlgOptimizerVisitor : public Visitor {
+    public:
+        Node* Visit(Node* node) {
+            Reshaper reshaper;
+            for (int i = 0; i < 10; ++i) {
+                node = Associativity(DistributivityLR(Majority(node)));
+                reshaper.Optimize(node);
+            }
+            return node;
+        }
+    };
 };
 
 class SizeAlgOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
+    Node* Optimize(Node* node) {
         Reshaper reshaper;
         bool optimized = false;
         while (!optimized) {
@@ -782,7 +769,7 @@ public:
 
 class DepthBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
+    Node* Optimize(Node* node) {
         //DumpMig(node, std::cout);
         
         auto criticalVoters = findCriticalVoters(node);
@@ -882,7 +869,7 @@ public:
 
 class SizeBoolOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
+    Node* Optimize(Node* node) {
         auto criticalVoters = findCriticalVoters(node);
         if (criticalVoters.size() < 3) {
             return node;
@@ -906,8 +893,8 @@ public:
         copyC = copyMaker.getNodeCopy(nodeC);
 
         MIGSynthezator synthezator;
-        ReplaceNode(copyB, copyA);
-        ReplaceNode(copyA, synthezator.SynthezInv(copyC));
+        //ReplaceNode(copyB, copyA);
+        ReplaceNode(copyB, synthezator.SynthezInv(copyC));
 
         // Third error
         Node* thirdError = copyMaker.copy(node);
@@ -915,8 +902,8 @@ public:
         copyB = copyMaker.getNodeCopy(nodeB);
         copyC = copyMaker.getNodeCopy(nodeC);
 
-        ReplaceNode(copyB, copyA);
-        ReplaceNode(copyC, copyA);
+        //ReplaceNode(copyB, copyA);
+        ReplaceNode(copyB, copyC);
 
         //DumpMig(firstError, std::cout);
         SizeAlgOptimizer sizeAlgOptimizer;
@@ -943,7 +930,7 @@ public:
 
 class TopLevelMigOptimizer : public MigOptimizer {
 public:
-    Node* Optimize(Node*& node) {
+    Node* Optimize(Node* node) {
         Reshaper reshaper;
         DepthAlgOptimizer depthAlgOptimizer;
         SizeAlgOptimizer sizeAlgOptimizer;
@@ -967,64 +954,10 @@ public:
     }
 };
 
-
-Node* CheckNodeValidity(Node* node) {
-    ValidityChecker checker;
-    bfs(node, checker);
-    return node;
-}
-
 void DumpMig(Node* node, std::ostream& stream=std::cout) {
 	Dumper dumper(stream);
     stream << "digraph MIG {\n";
 	bfs(node, dumper);
     stream << "}\n";
 	return;
-}
-
-void CheckEqualNodes(Node* first, Node* second, int size) {
-    std::vector<bool> input;
-    for (int i = 0; i < std::pow(2, size); ++i) {
-        input.clear();
-        for (int j = 0; j < size; ++j) {
-            input.push_back(bool((1 << j) & i));
-        }
-        assert(first->Compute(input) == second->Compute(input));
-        std::cout << i << " passed\n";
-    }
-}
-
-
-
-// TEST
-
-int main() {
-	MIGSynthezator mig =  MIGSynthezator();
-    Node* testNode = mig.Synthez({true, false, true, true,
-                                false, true, false, false });
-    
-    /*
-    assert(testNode->Compute({false, true}));
-    assert(!testNode->Compute({true, false}));
-    assert(!testNode->Compute({true, true}));
-    assert(testNode->Compute({false, false}));
-    */
-    
-    DumpMig(testNode, std::cout);
-    CopyMaker copyMaker;
-    Node* oldNode = copyMaker.copy(testNode);
-    
-
-    TopLevelMigOptimizer optimizer = TopLevelMigOptimizer();
-    std::cout << "old size: " << optimizer.GetSize(testNode) << "\n";
-    std::cout << "old depth: " << optimizer.GetDepth(testNode) << "\n";
-    optimizer.Optimize(testNode);
-    std::cout << "new size: " << optimizer.GetSize(testNode) << "\n";
-    std::cout << "new depth: " << optimizer.GetDepth(testNode) << "\n";
-
-    DumpMig(testNode, std::cout);
-    CheckEqualNodes(oldNode, testNode, 3);
-
-     
-	return 0;
 }
