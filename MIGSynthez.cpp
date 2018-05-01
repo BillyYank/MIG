@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <stack>
+#include "utils.cpp"
 
 
 bool constTrue_(std::vector<bool>& inputs) {
@@ -84,6 +85,23 @@ public:
                 delete input;
             }
         }
+    }
+
+    bool HasInputs(std::vector<std::pair<Node*,bool>> nodes) {
+        for (auto node: nodes) {
+            bool hasNode = false;
+            for (Node* input: inputs) {
+                if (input == node.first || (node.second == false && input->GetName() == "inv" &&
+                            input->inputs[0] == node.first)) {
+                    hasNode = true;
+                    break;
+                }
+            }
+            if (!hasNode) {
+                return false;
+            }
+        }
+        return true;
     }
 
 private:
@@ -274,13 +292,13 @@ public:
     virtual Node* Synthez(std::vector<bool> function) = 0;
 
 protected:
-    void ConnectNodes(Node* in, Node* out) {
+    static void ConnectNodes(Node* in, Node* out) {
         (in->outputs).push_back(out);
         (out->inputs).push_back(in);
         return;
     }
     
-    Node* SynthezCustomNode(std::vector<Node*> inputs,
+    static Node* SynthezCustomNode(std::vector<Node*> inputs,
                             NamedFunction namedFunction) {
         Node* newNode = new Node(namedFunction);
         for (auto& node: inputs) {
@@ -316,23 +334,42 @@ public:
         return SynthezDisj(conjunctions);
     }
 
+    static Node* SynthezRandom(int inputsNum) {
+        std::vector<Node*> prev_layer;
+        for (int i = 0; i < inputsNum; ++i) {
+            prev_layer.push_back(new Node({[=](std::vector<bool>& inputVals)->bool {
+                return inputVals[i];
+            }, "input" }));
+        }
+
+        do {
+            std::vector<Node*> layer;
+            for (int i = 0; i < prev_layer.size() / 2; ++i) {
+                std::vector<Node*> sample = getSample(prev_layer, 3);
+                layer.push_back(SynthezRandomMig(sample));
+            }
+            prev_layer = layer;
+        } while (prev_layer.size() > 1);
+        return prev_layer[0];
+    }
+
 private:
-    Node* SynthezInv(Node* node) {
+    static Node* SynthezInv(Node* node) {
         return SynthezCustomNode({node}, invFunction);
     }
     
     
-    Node* SynthezOR(Node* node1, Node* node2) {
+    static Node* SynthezOR(Node* node1, Node* node2) {
         Node* trueNode = new Node(constTrue);
         return SynthezCustomNode({node1, node2, trueNode}, migFunction);
     }
     
-    Node* SynthezAND(Node* node1, Node* node2) {
+    static Node* SynthezAND(Node* node1, Node* node2) {
         Node* falseNode = new Node(constFalse);
         return SynthezCustomNode({node1, node2, falseNode}, migFunction);
     }
     
-    Node* SynthezConj(std::vector<Node*>& inputs, int num) {
+    static Node* SynthezConj(std::vector<Node*>& inputs, int num) {
         bool firstBit = bool((1 << 0) & num);
         std::vector<Node*> nodes;
         nodes.push_back(firstBit ? inputs[0] : SynthezInv(inputs[0]));
@@ -345,7 +382,7 @@ private:
         return nodes.back();
     }
     
-    Node* SynthezDisj(std::vector<Node*>& inputs) {
+    static Node* SynthezDisj(std::vector<Node*>& inputs) {
         if (inputs.empty()) {
             return new Node(constFalse);
         } else {
@@ -356,6 +393,18 @@ private:
             }
             return nodes.back();
         }
+    }
+
+    static Node* SynthezRandomMig(std::vector<Node*>& sample) {
+        Node* mig = new Node(migFunction);
+        for (auto node: sample) {
+            if (rand() % 2) {
+                ConnectNodes(node, mig);
+            } else {
+                ConnectNodes(SynthezInv(node), mig);
+            }
+        }
+        return mig;
     }
 
     friend class DepthBoolOptimizer;
@@ -390,6 +439,7 @@ public:
     }
 
 protected:
+    // depricated
     Node* GetRandomNode(Node* node) {
         int nodeSize = GetSize(node);
         if (nodeSize == 0) {
@@ -457,8 +507,6 @@ protected:
         DeleteNode(oldNode);
         return ElemenateInversions(newNode);
     }
-
-    //
     
     // Axiom transformations
     static Node* Commutativity(Node* node) {
@@ -469,7 +517,6 @@ protected:
         }
         return node;
     }
-    
     
     static Node* Associativity(Node* node) {
         if (node->GetName() == "mig" &&
@@ -490,7 +537,6 @@ protected:
         }
         return node;
     }
-    
     
     static Node* Relevance(Node* node) {
         //TODO
@@ -586,10 +632,12 @@ protected:
     class ElemenateInversionsVisitor : public Visitor {
     public:
         Node* Visit(Node* node) {
+            /*
             if (node->GetName() == "inv" &&
                 node->inputs[0]->GetName() == "inv") {
                 return  ReplaceNode(node, node->inputs[0]->inputs[0]);
             }
+            */
             return node;
         }
     };
@@ -759,8 +807,7 @@ private:
 class DepthBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
-        //DumpMig(node, std::cout);
-        
+        /*
         auto criticalVoters = findCriticalVoters(node);
         if (criticalVoters.size() < 2) {
             return node;
@@ -846,12 +893,14 @@ public:
         Node* result = synthezator.SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
 
         if (GetDepth(result) < GetDepth(node)) {
-            delete node;
+            //delete node;
             return result;
         } else {
             //delete result;
             return node;
         }
+        */
+       return node;
     }
 };
 
@@ -863,49 +912,39 @@ public:
         if (criticalVoters.size() < 3) {
             return node;
         }
-        Node* nodeA = criticalVoters[0], *nodeB = criticalVoters[1], *nodeC = criticalVoters[2];
-        //DumpMig(node, std::cout);
+        Node* nodeX = criticalVoters[0], *nodeY = criticalVoters[1], *nodeZ = criticalVoters[2];
 
         CopyMaker copyMaker;
         // First Error        
         Node* firstError = copyMaker.copy(node);
-        Node* copyA = copyMaker.getNodeCopy(nodeA);
-        Node* copyB = copyMaker.getNodeCopy(nodeB);
-        Node* copyC = copyMaker.getNodeCopy(nodeC);
-
-        ReplaceNode(copyA, copyB);
+        Node* copyX = copyMaker.getNodeCopy(nodeX);
+        Node* copyY = copyMaker.getNodeCopy(nodeY);
+        Node* copyZ = copyMaker.getNodeCopy(nodeZ);
+        ReplaceNode(copyX, copyY);
 
         // Second Error        
         Node* secondError = copyMaker.copy(node);
-        copyA = copyMaker.getNodeCopy(nodeA);
-        copyB = copyMaker.getNodeCopy(nodeB);
-        copyC = copyMaker.getNodeCopy(nodeC);
-
-        MIGSynthezator synthezator;
-        //ReplaceNode(copyB, copyA);
-        ReplaceNode(copyB, synthezator.SynthezInv(copyC));
+        copyX = copyMaker.getNodeCopy(nodeX);
+        copyY = copyMaker.getNodeCopy(nodeY);
+        copyZ = copyMaker.getNodeCopy(nodeZ);
+        SecondErrorVisitor secondErrorVisitor(nodeX, nodeY, nodeZ);
+        secondError = IterateWhileNotOptimized(secondError, secondErrorVisitor);
 
         // Third error
         Node* thirdError = copyMaker.copy(node);
-        copyA = copyMaker.getNodeCopy(nodeA);
-        copyB = copyMaker.getNodeCopy(nodeB);
-        copyC = copyMaker.getNodeCopy(nodeC);
+        copyX = copyMaker.getNodeCopy(nodeX);
+        copyY = copyMaker.getNodeCopy(nodeY);
+        copyZ = copyMaker.getNodeCopy(nodeZ);
+        ThirdErrorVisitor thirdErrorVisitor(nodeX, nodeY, nodeZ);
+        thirdError = IterateWhileNotOptimized(thirdError, thirdErrorVisitor);
 
-        //ReplaceNode(copyB, copyA);
-        ReplaceNode(copyB, copyC);
-
-        //DumpMig(firstError, std::cout);
         SizeAlgOptimizer sizeAlgOptimizer;
         firstError = sizeAlgOptimizer.Optimize(firstError);
-        //DumpMig(firstError, std::cout);
         secondError = sizeAlgOptimizer.Optimize(secondError);
         thirdError = sizeAlgOptimizer.Optimize(thirdError);
 
+        Node* result = MIGSynthezator::SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
 
-        Node* result = synthezator.SynthezCustomNode({firstError, secondError, thirdError}, migFunction);
-
-        std::cout << "Result Depth: " << GetDepth(result) << "\n";
-        std::cout << "Result Size: " << GetSize(result) << "\n";
         if (GetDepth(result) < GetDepth(node)) {
             //delete node;
             return result;
@@ -914,31 +953,73 @@ public:
             return node;
         }
     }
+private:
+    class SecondErrorVisitor : public Visitor {
+    public:
+        SecondErrorVisitor(Node* nodeX, Node* nodeY, Node* nodeZ) : nodeX(nodeX), nodeY(nodeY), nodeZ(nodeZ) {}
+
+        Node* Visit(Node* node) {
+            if (node->HasInputs({{nodeX, 1},{nodeY, 0},{nodeZ, 1}})) {
+                return ReplaceNode(node, MIGSynthezator::SynthezInv(nodeY));
+            } else if (node->HasInputs({{nodeX, 0},{nodeY, 1},{nodeZ, 0}})) {
+                return ReplaceNode(node, nodeY);
+            } else {
+                return node;
+            }
+        }
+    private:
+        Node* nodeX;
+        Node* nodeY;
+        Node* nodeZ;
+    };
+
+    class ThirdErrorVisitor : public Visitor {
+    public:
+        ThirdErrorVisitor(Node* nodeX, Node* nodeY, Node* nodeZ) : nodeX(nodeX), nodeY(nodeY), nodeZ(nodeZ) {}
+
+        Node* Visit(Node* node) {
+            if (node->HasInputs({{nodeX, 1},{nodeY, 0},{nodeZ, 0}})) {
+                return ReplaceNode(node, MIGSynthezator::SynthezInv(nodeY));
+            } else if (node->HasInputs({{nodeX, 0},{nodeY, 1},{nodeZ, 1}})) {
+                return ReplaceNode(node, nodeY);
+            } else {
+                return node;
+            }
+        }
+    private:
+        Node* nodeX;
+        Node* nodeY;
+        Node* nodeZ;
+    };
+
 };
 
 
 class TopLevelMigOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
+        std::cout << "INITIAL DEPTH: " << GetDepth(node) << "\n";
+
         Reshaper reshaper;
         DepthAlgOptimizer depthAlgOptimizer;
         SizeAlgOptimizer sizeAlgOptimizer;
         DepthBoolOptimizer depthBoolOptimizer;
         SizeBoolOptimizer sizeBoolOptimizer;
         
-        //depthAlgOptimizer.Optimize(node);
-        reshaper.Optimize(node);
+        node = depthAlgOptimizer.Optimize(node);
+        node = reshaper.Optimize(node);
         node = sizeAlgOptimizer.Optimize(node);
-        //node = depthBoolOptimizer.Optimize(node);
+        node = depthBoolOptimizer.Optimize(node);
         node = sizeBoolOptimizer.Optimize(node);
         node = reshaper.Optimize(node);
-        //depthAlgOptimizer.Optimize(node);
-        //sizeBoolOptimizer.Optimize(node);
+        node = depthAlgOptimizer.Optimize(node);
+        node = sizeBoolOptimizer.Optimize(node);
         node = sizeAlgOptimizer.Optimize(node);
         node = reshaper.Optimize(node);
-        //depthAlgOptimizer.Optimize(node);
+        node = depthAlgOptimizer.Optimize(node);
         node = sizeAlgOptimizer.Optimize(node);
 
+        std::cout << "FINAL DEPTH: " << GetDepth(node) << "\n";
         return node;
     }
 };

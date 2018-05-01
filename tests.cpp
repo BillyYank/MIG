@@ -63,6 +63,7 @@ Node* checkSynthezator(std::vector<bool>& funcTable) {
     
     std::vector<bool> input;
     int inputsNum = int(log2(funcTable.size()));
+    /*
     for (int i = 0; i < funcTable.size(); ++i) {
         input.clear();
         for (int j = 0; j < inputsNum; ++j) {
@@ -75,7 +76,9 @@ Node* checkSynthezator(std::vector<bool>& funcTable) {
         }
     }
     std::cout << "checkSynthezator passed\n";
-    return node;
+    */
+    return mig.SynthezRandom(inputsNum);
+    //return node;
 }
 
 void checkCopyMaker(Node* node, int size) {
@@ -127,15 +130,18 @@ void checkOptimizers(Node* node, int size) {
         }
         std::cout << optimizer.name << " passed\n";
     }
-    
 }
 
 
 void run_test(std::vector<bool>& funcTable) {
     Node* node = checkSynthezator(funcTable);
+    DumpMig(node, std::cout);
     int size = int(log2(funcTable.size()));
     checkCopyMaker(node, size);
     checkOptimizers(node, size);
+
+    TopLevelMigOptimizer topLevelMigOptimizer;
+    DumpMig(topLevelMigOptimizer.Optimize(node), std::cout);
     return;
 }
 
@@ -154,6 +160,6 @@ void run_stress_test(int size, int efforts) {
 
 
 int main () {
-    run_stress_test(7, 100);
+    run_stress_test(10, 10);
     return 0;
 }
