@@ -1,6 +1,7 @@
 #include "MIGSynthez.cpp"
 #include <exception>
 
+int size_after, size_before, depth_after, depth_before;
 
 class ValidityChecker : public Visitor {
 public:
@@ -132,16 +133,19 @@ void checkOptimizers(Node* node, int size) {
     }
 }
 
-
 void run_test(std::vector<bool>& funcTable) {
     Node* node = checkSynthezator(funcTable);
-    DumpMig(node, std::cout);
+    size_before += MigOptimizer::GetSize(node);
+    depth_before += MigOptimizer::GetDepth(node);
+    //DumpMig(node, std::cout);
     int size = int(log2(funcTable.size()));
     checkCopyMaker(node, size);
     checkOptimizers(node, size);
 
     TopLevelMigOptimizer topLevelMigOptimizer;
-    DumpMig(topLevelMigOptimizer.Optimize(node), std::cout);
+    Node* res = topLevelMigOptimizer.Optimize(node);
+    size_after += MigOptimizer::GetSize(res);
+    depth_after += MigOptimizer::GetDepth(res);
     return;
 }
 
@@ -160,6 +164,11 @@ void run_stress_test(int size, int efforts) {
 
 
 int main () {
-    run_stress_test(10, 10);
+    run_stress_test(10, 50);
+    std::cout << "depth, size before: " << depth_before << " " << size_before << "\n";
+    std::cout << "depth, size after: " << depth_after << " " << size_after << "\n";
+
+    std::cout << "depth_reduction: " << (100. * (depth_before - depth_after) )/ depth_before << " percent\n";
+    std::cout << "size_reduction: " << (100. * (size_before - size_after) )/ size_before << " percent\n";
     return 0;
 }

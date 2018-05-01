@@ -420,19 +420,19 @@ public:
     
     Node* Optimize(Node* node) = 0;
     
-    int GetSize(Node* node) {
+    static int GetSize(Node* node) {
         MigSizeCountor migSizeVisitor;
         bfs(node, migSizeVisitor);
         return migSizeVisitor.Count();
     }
     
-    int GetDepth(Node* node) {
+    static int GetDepth(Node* node) {
         MigDepthCountor migDepthCountor;
         dfs(node, migDepthCountor);
         return migDepthCountor.GetDepth(node);
     }
 
-    static std::vector<Node*> GetAllParents(Node* node) {
+    static static std::vector<Node*> GetAllParents(Node* node) {
         NodeToVector nodeToVector;
         bfs(node, nodeToVector);
         return nodeToVector.nodesVector;
