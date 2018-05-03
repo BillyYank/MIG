@@ -87,6 +87,7 @@ public:
         }
     }
 
+    // проверка, содержится ли множество nodes в множестве node->inputs
     bool HasInputs(std::vector<std::pair<Node*,bool>> nodes) {
         for (auto node: nodes) {
             bool hasNode = false;
@@ -113,6 +114,7 @@ private:
 	std::vector<Node*> inputs;
 	std::vector<Node*> outputs;
 
+    // подсчитываем значение на node при помощи dfs
     class ComputeVisitor : public Visitor {
     public:
         ComputeVisitor(std::vector<bool>& inputValues) : inputValues(inputValues) {}
@@ -158,7 +160,6 @@ struct Edge {
     Node* in;
     Node* out;
 };
-
 
 
 
@@ -227,6 +228,7 @@ private:
     std::unordered_map<Node*, int> depthes;
 };
 
+// Топологическая сортировка node, понадобится далее, в BoolOptimizators
 class TopologicalSorter : public Visitor {
 public:
     Node* Visit(Node* node) {
@@ -239,6 +241,7 @@ private:
     friend class MigOptimizer;
 };
 
+// Возвращает список всех предков node
 class NodeToVector : public Visitor {
 public:
     Node* Visit(Node* node) {
@@ -334,6 +337,9 @@ public:
         return SynthezDisj(conjunctions);
     }
 
+
+    // Синтез случайного графа, каждый node получается из предыдущих выбором случайных трех, навешеванием на них
+    // отрицаний с вероятностью 1/2 и применением majority
     static Node* SynthezRandom(int inputsNum) {
         std::vector<Node*> prev_layer;
         for (int i = 0; i < inputsNum; ++i) {
@@ -344,7 +350,7 @@ public:
 
         do {
             std::vector<Node*> layer;
-            for (int i = 0; i < prev_layer.size() / 2; ++i) {
+            for (int i = 0; i < 2 * prev_layer.size() / 3; ++i) {
                 std::vector<Node*> sample = getSample(prev_layer, 3);
                 layer.push_back(SynthezRandomMig(sample));
             }
@@ -432,7 +438,8 @@ public:
         return migDepthCountor.GetDepth(node);
     }
 
-    static static std::vector<Node*> GetAllParents(Node* node) {
+    // Возвращает всех предков
+    static std::vector<Node*> GetAllParents(Node* node) {
         NodeToVector nodeToVector;
         bfs(node, nodeToVector);
         return nodeToVector.nodesVector;
@@ -609,6 +616,8 @@ protected:
         return node;
     }
 
+    // Пробегаем по всем предкам node, если можем что-то оптимизировать -- оптимизируем, а
+    // начинаем сначаа, не можем -- возвращаем исходный node
     static Node* IterateWhileNotOptimized(Node* node, Visitor& visitor) {
         bool optimized = false;
         while (!optimized) {
@@ -629,6 +638,7 @@ protected:
         return node;
     }
 
+    // Убирает двойные отрицания, иногда вызывает segmentatin fault, поэтому закомменчен
     class ElemenateInversionsVisitor : public Visitor {
     public:
         Node* Visit(Node* node) {
@@ -647,6 +657,7 @@ protected:
         return IterateWhileNotOptimized(node, visitor);
     }
 
+    // Если в mig входит несколько констант, то mig пожно упростить
     class ElemenateConstNodesVisitor : public Visitor {
     public:
         Node* Visit(Node* node) {
@@ -717,6 +728,7 @@ protected:
 };
 
 
+// копируем node с сщхранением таблицы соответствия предков
 class CopyMaker : public Visitor {
 public:
     Node* Visit(Node* node) {
@@ -804,6 +816,7 @@ private:
 };
 
 
+// Оказывается неэффективнее SizeBoolOptimizer, иногда дает segmrntation fault
 class DepthBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
@@ -954,6 +967,7 @@ public:
         }
     }
 private:
+    // Как в статье мы можем заменить паттерны M(X, !Y, Z) на !Y и так далее
     class SecondErrorVisitor : public Visitor {
     public:
         SecondErrorVisitor(Node* nodeX, Node* nodeY, Node* nodeZ) : nodeX(nodeX), nodeY(nodeY), nodeZ(nodeZ) {}

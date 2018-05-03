@@ -3,6 +3,8 @@
 
 int size_after, size_before, depth_after, depth_before;
 
+
+// Проверка корректности node
 class ValidityChecker : public Visitor {
 public:
     Node* Visit(Node* node) {
@@ -57,6 +59,7 @@ void checkEqualNodes(Node* first, Node* second, int size) {
     }
 }
 
+// Случайно генерируем node
 Node* checkSynthezator(std::vector<bool>& funcTable) {
     std::cout << "checkSynthezator run\n";
     MIGSynthezator mig =  MIGSynthezator();
