@@ -688,6 +688,7 @@ protected:
         return ElemenateConstNodes(ElemenateInversions(node));
     }
 
+    // ищем input-ы c  наибольшим вкладом в node
     std::vector<Node*> findCriticalVoters(Node* node) {
         std::unordered_map<Node*, double> voters;
         TopologicalSorter topologicalSorter;
@@ -917,7 +918,8 @@ public:
     }
 };
 
-
+// добавляем ошибки x=y, y=!z когда x=y и y=z когда x=y
+// это позволяет нам избавится от M(X, !Y, Z), M(!X, Y, !Z)
 class SizeBoolOptimizer : public MigOptimizer {
 public:
     Node* Optimize(Node* node) {
